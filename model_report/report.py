@@ -169,7 +169,7 @@ class ReportAdmin(object):
     list_serie_fields = ()
     """List of fields to group by results in chart."""
 
-    template_name = None
+    template_name = 'model_report/report.html'
     """Template file name to render the report."""
 
     title = None
@@ -533,7 +533,7 @@ class ReportAdmin(object):
 
         if isinstance(context_or_response, HttpResponse):
             return context_or_response
-        return render_to_response('model_report/report.html', context_or_response, context_instance=RequestContext(request))
+        return render_to_response(self.template_name, context_or_response, context_instance=RequestContext(request))
 
     def has_report_totals(self):
         return not (not self.report_totals)
