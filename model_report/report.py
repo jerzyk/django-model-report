@@ -363,17 +363,18 @@ class ReportAdmin(object):
         return values
 
     # @cache_return
-    def get_queryset(self, filter_kwargs):
+    def get_queryset(self, filter_kwargs=None):
         """
         Return the the queryset
         """
         qs = self.model.objects.all()
-        for k, v in filter_kwargs.items():
-            if not v is None and v != '':
-                if hasattr(v, 'values_list'):
-                    v = v.values_list('pk', flat=True)
-                    k = '%s__pk__in' % k.split("__")[0]
-                qs = qs.filter(Q(**{k: v}))
+        if filter_kwargs is not None:
+            for k, v in filter_kwargs.items():
+                if not v is None and v != '':
+                    if hasattr(v, 'values_list'):
+                        v = v.values_list('pk', flat=True)
+                        k = '%s__pk__in' % k.split("__")[0]
+                    qs = qs.filter(Q(**{k: v}))
         self.queryset = qs.distinct()
         return self.queryset
 
