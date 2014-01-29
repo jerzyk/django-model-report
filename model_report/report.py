@@ -219,7 +219,7 @@ class ReportAdmin(object):
     inlines = []
     """List of other's Report related to the main report."""
 
-    query_set = None
+    queryset = None
     """#TODO"""
 
     def __init__(self, parent_report=None, request=None):
@@ -279,7 +279,6 @@ class ReportAdmin(object):
                                 self.related_inline_filters.append([pattname, cattname, self.parent_report.get_fields().index(pattname)])
                     except Exception, e:
                         pass
-
 
     def _get_grouper_text(self, groupby_field, value):
         try:
@@ -364,7 +363,7 @@ class ReportAdmin(object):
         return values
 
     # @cache_return
-    def get_query_set(self, filter_kwargs):
+    def get_queryset(self, filter_kwargs):
         """
         Return the the queryset
         """
@@ -375,8 +374,8 @@ class ReportAdmin(object):
                     v = v.values_list('pk', flat=True)
                     k = '%s__pk__in' % k.split("__")[0]
                 qs = qs.filter(Q(**{k: v}))
-        self.query_set = qs.distinct()
-        return self.query_set
+        self.queryset = qs.distinct()
+        return self.queryset
 
     def get_title(self):
         """
@@ -809,7 +808,7 @@ class ReportAdmin(object):
             if kwarg in self.override_field_filter_values:
                 filter_kwargs[kwarg] = self.override_field_filter_values.get(kwarg)(self, value)
 
-        qs = self.get_query_set(filter_kwargs)
+        qs = self.get_queryset(filter_kwargs)
         ffields = [f if 'self.' not in f else 'pk' for f in self.get_query_field_names() if f not in filter_related_fields]
         extra_ffield = []
         backend = settings.DATABASES['default']['ENGINE'].split('.')[-1]
