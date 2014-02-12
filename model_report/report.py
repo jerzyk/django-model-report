@@ -242,7 +242,10 @@ class ReportAdmin(object):
                             if 'ManyToManyField' in unicode(pre_field) or isinstance(pre_field, RelatedObject):
                                 m2mfields.append(pre_field)
                         elif isinstance(pre_field, RelatedObject):
-                            base_model = pre_field.model
+                            if isinstance(pre_field.field, generic.GenericRelation):
+                                base_model = pre_field.parent_model
+                            else:
+                                base_model = pre_field.model
                             pre_field = base_model._meta.get_field_by_name(field_lookup)[0]
                         else:
                             if 'Date' in unicode(pre_field):
