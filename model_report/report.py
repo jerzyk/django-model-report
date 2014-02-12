@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import copy
+from django.contrib.contenttypes import generic
 from xlwt import Workbook, easyxf
 from itertools import groupby
 
