@@ -1012,9 +1012,9 @@ class ReportAdmin(object):
                 rows.append(row)
             if row_group_totals:
                 if groupby_data['groupby']:
-                    header_group_total = compute_row_header(self.group_totals)
+                    # header_group_total = compute_row_header(self.group_totals)
                     row = compute_row_totals(self.group_totals, row_group_totals, is_group_total=True)
-                    rows.append(header_group_total)
+                    # rows.append(header_group_total)
                     rows.append(row)
                 for k, v in row_group_totals.items():
                     if k in row_report_totals:
