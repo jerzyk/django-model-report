@@ -459,12 +459,12 @@ class ReportAdmin(object):
                         stylevalue = easyxf('alignment: horizontal left, vertical top;')
                         row_index = 0
                         for index, x in enumerate(column_labels):
-                            sheet1.write(row_index, index, u'%s' % g, stylebold)
+                            sheet1.write(row_index, index, u'%s' % x, stylebold)
                         row_index += 1
 
                         for g, rows in report_rows:
                             if g:
-                                sheet1.write(row_index, 0, u'%s' % x, stylebold)
+                                sheet1.write(row_index, 0, u'%s' % g, stylebold)
                                 row_index += 1
                             for row in list(rows):
                                 if row.is_value():
