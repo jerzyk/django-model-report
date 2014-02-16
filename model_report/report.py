@@ -469,11 +469,7 @@ class ReportAdmin(object):
                             for row in list(rows):
                                 if row.is_value():
                                     for index, x in enumerate(row):
-                                        if isinstance(x.value, (list, tuple)):
-                                            xvalue = ''.join(['%s\n' % v for v in x.value])
-                                        else:
-                                            xvalue = x.text()
-                                        sheet1.write(row_index, index, xvalue, stylevalue)
+                                        sheet1.write(row_index, index, unicode(x), stylevalue)
                                     row_index += 1
                                 elif row.is_caption:
                                     for index, x in enumerate(row):
