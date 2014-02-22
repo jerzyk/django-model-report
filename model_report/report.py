@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import copy
 from django.contrib.contenttypes import generic
+from django.utils.formats import localize
 from xlwt import Workbook, easyxf
 from itertools import groupby
 
@@ -330,7 +331,7 @@ class ReportAdmin(object):
                     return getattr(obj, 'get_%s_display' % model_field.name)()
         except:
             pass
-        return value
+        return localize(value)
 
     def get_empty_row_asdict(self, collection, default_value=[]):
         erow = {}
