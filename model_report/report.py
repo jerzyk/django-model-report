@@ -76,11 +76,11 @@ class FitSheetWrapper(object):
             style.num_format_str = 'dd/mm/yyyy'
             self.sheet.write(r, c, label, style)
             style.num_format_str = _saved_format
-        elif isinstance(label, (float, Decimal)):
-            _saved_format = style.num_format_str
-            style.num_format_str = '#,##0.00'
-            self.sheet.write(r, c, label, style)
-            style.num_format_str = _saved_format
+        # elif isinstance(label, (float, Decimal)):
+        #     _saved_format = style.num_format_str
+        #     style.num_format_str = '#,##0.00'
+        #     self.sheet.write(r, c, label, style)
+        #     style.num_format_str = _saved_format
         else:
             self.sheet.write(r, c, label, style)
 
@@ -539,16 +539,17 @@ class ReportAdmin(object):
                         for row in list(rows):
                             if row.is_value():
                                 for index, x in enumerate(row):
-                                    if isinstance(x.value, (list, tuple)):
-                                        if len(x.value) < 1:
-                                            xvalue = u''
-                                        elif len(x.value) == 1:
-                                            xvalue = x.value[0]
-                                        else:
-                                            xvalue = u''.join([unicode(v) for v in x.value])
-                                    else:
+                                    # if isinstance(x.value, (list, tuple)):
+                                    #     if len(x.value) < 1:
+                                    #         xvalue = u''
+                                    #     elif len(x.value) == 1:
+                                    #         xvalue = x.value[0]
+                                    #     else:
+                                    #         xvalue = u''.join([unicode(v) for v in x.value])
+                                    # else:
                                         # xvalue = x.text()
-                                        xvalue = x.value
+                                        # xvalue = x.value
+                                    xvalue = x.formatted_value()
                                     sheet1.write(row_index, index, xvalue, stylevalue)
                                     # sheet1.write(row_index, index, x.value, stylevalue)
                                 row_index += 1
@@ -989,8 +990,8 @@ class ReportAdmin(object):
                     fun = row_config[field_name]
                     cell_value = fun(row_values[field_name])
                     if field_name in self.get_m2m_field_names():
-                        # cell_value = ReportValue([cell_value])
-                        cell_value = [cell_value]
+                        cell_value = ReportValue([cell_value])
+                        # cell_value = [cell_value]
                     cell_value = ReportValue(cell_value)
                     cell_value.is_value = False
                     cell_value.is_group_total = is_group_total

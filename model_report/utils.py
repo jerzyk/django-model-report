@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from decimal import Decimal
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import ugettext as _
 from django.utils.encoding import force_unicode
 
 
@@ -12,9 +12,11 @@ def base_label(report, field):
         return "%s" % field.verbose_name.title()
     return field
 
-base_lookup_label = lambda report, field: "[%s] %s" % (field.model._meta.verbose_name.title(), field.verbose_name.title())
+base_lookup_label = lambda report, field: "[%s] %s" % (field.model._meta.verbose_name.title(),
+                                                       field.verbose_name.title())
 
-model_lookup_label = lambda report, field: "[%s] %s" % (report.model._meta.verbose_name.title(), field.verbose_name.title())
+model_lookup_label = lambda report, field: "[%s] %s" % (report.model._meta.verbose_name.title(),
+                                                        field.verbose_name.title())
 
 
 def sum_column(values):
@@ -100,11 +102,17 @@ class ReportValue(object):
         """
         return value
 
+    def formatted_value(self):
+        """
+        Render value. Process via overrides.
+        """
+        return self.format(self.value, instance=self)
+
     def text(self):
         """
         Render as text the value. This function also format the value.
         """
-        return force_unicode(self.format(self.value, instance=self))
+        return force_unicode(self.formatted_value())
 
     def __repr__(self):
         return self.text()
