@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 import copy
+import datetime
+import re
 from django.contrib.contenttypes import generic
 from django.utils.formats import localize
-from xlwt import Workbook, easyxf
+from xlwt import Workbook, easyxf, XFStyle
 from itertools import groupby
 
 from django.http import HttpResponse
@@ -27,6 +29,23 @@ from model_report.export_pdf import render_to_pdf
 import arial10
 
 
+DEFAULT_CHART_TYPES = (
+    ('area', _('Area')),
+    ('line', _('Line')),
+    ('column', _('Columns')),
+    ('pie', _('Pie'))
+)
+
+CHART_SERIE_OPERATOR = (
+    ('', u'---------'),
+    ('sum', _('Sum')),
+    ('len', _('Count')),
+    ('avg', _('Average')),
+    ('min', _('Min')),
+    ('max', _('Max'))
+)
+
+
 class FitSheetWrapper(object):
     """Try to fit columns to max size of any entry.
     To use, wrap this around a worksheet returned from the
@@ -42,19 +61,35 @@ class FitSheetWrapper(object):
         self.widths = dict()
         self.heights = dict()
 
-    def write(self, r, c, label='', *args, **kwargs):
-        self.sheet.write(r, c, label, *args, **kwargs)
+    def write(self, r, c, label=u'', style=None):
+        if not style:
+            style = XFStyle()
+
+        if isinstance(label, datetime.datetime):
+            _saved_format = style.num_format_str
+            style.num_format_str = 'dd/mm/yyyy hh:mm:ss'
+            self.sheet.write(r, c, label, style)
+            style.num_format_str = _saved_format
+        elif isinstance(label, datetime.date):
+            _saved_format = style.num_format_str
+            style.num_format_str = 'dd/mm/yyyy'
+            self.sheet.write(r, c, label, style)
+            style.num_format_str = _saved_format
+        else:
+            self.sheet.write(r, c, label, style)
+
         self.sheet.row(r).collapse = True
-        bold = False
-        if args:
-            style = args[0]
-            bold = str(style.font.bold) in ('1', 'true', 'True')
-        width = int(arial10.fitwidth(label, bold))
+
+        unicode_label = unicode(label)
+
+        bold = str(style.font.bold) in ('1', 'true', 'True')
+
+        width = int(arial10.fitwidth(unicode_label, bold))
         if width > self.widths.get(c, 0):
             self.widths[c] = width
             self.sheet.col(c).width = width
 
-        height = int(arial10.fitheight(label, bold))
+        height = int(arial10.fitheight(unicode_label, bold))
         if height > self.heights.get(r, 0):
             self.heights[r] = height
             self.sheet.row(r).height = height
@@ -65,10 +100,11 @@ class FitSheetWrapper(object):
 
 try:
     from collections import OrderedDict
-except:
-    OrderedDict = dict  # pyflakes:ignore
+except ImportError:
+    OrderedDict = dict
 
 
+# noinspection PyBroadException
 def autodiscover():
     """
     Auto-discover INSTALLED_APPS report.py modules and fail silently when
@@ -83,8 +119,9 @@ def autodiscover():
     for app in settings.INSTALLED_APPS:
         mod = import_module(app)
         # Attempt to import the app's admin module.
+        before_import_registry = copy.copy(reports)
+
         try:
-            before_import_registry = copy.copy(reports)
             import_module('%s.reports' % app)
         except:
             # Reset the model registry to the state before the last import as
@@ -148,6 +185,7 @@ def cache_return(fun):
     return wrap
 
 
+# noinspection PyProtectedMember
 class ReportAdmin(object):
     """
     Class to represent a Report.
@@ -224,6 +262,10 @@ class ReportAdmin(object):
     queryset = None
     """#TODO"""
 
+    onlytotals = False
+    groupby = None
+    slug = None
+
     def __init__(self, parent_report=None, request=None):
         self.parent_report = parent_report
         self.request = request
@@ -271,25 +313,36 @@ class ReportAdmin(object):
         self.model_fields = model_fields
         self.model_m2m_fields = model_m2m_fields
         if parent_report:
-            self.related_inline_field = [f for f, x in self.model._meta.get_fields_with_model() if f.rel and hasattr(f.rel, 'to') and f.rel.to is self.parent_report.model][0]
+            self.related_inline_field = [f for f, x in self.model._meta.get_fields_with_model()
+                                         if f.rel and hasattr(f.rel, 'to') and f.rel.to is self.parent_report.model][0]
             self.related_inline_accessor = self.related_inline_field.related.get_accessor_name()
-            self.related_fields = ["%s__%s" % (pfield.model._meta.module_name, attname) for pfield, attname in self.parent_report.model_fields if not isinstance(pfield, (str, unicode)) and  pfield.model == self.related_inline_field.rel.to]
+            self.related_fields = ["%s__%s" % (pfield.model._meta.module_name, attname) for pfield, attname in
+                                   self.parent_report.model_fields if not isinstance(pfield, (str, unicode)) and
+                                   pfield.model == self.related_inline_field.rel.to]
             self.related_inline_filters = []
 
             for pfield, pattname in self.parent_report.model_fields:
                 for cfield, cattname in self.model_fields:
-                    try:
+                    # try:
                         if pattname in cattname:
                             if pfield.model == cfield.model:
-                                self.related_inline_filters.append([pattname, cattname, self.parent_report.get_fields().index(pattname)])
-                    except Exception, e:
-                        pass
+                                self.related_inline_filters.append([pattname, cattname,
+                                                                    self.parent_report.get_fields().index(pattname)])
+                    # TODO: narrow it
+                    # except Exception, e:
+                    #     pass
+
+    def get_slug(self):
+        if self.slug is None:
+            self.slug = re.sub(r'(.)([A-Z])', r'\1-\2', self.__class__.__name__).lower()
+        return self.slug
 
     def _get_grouper_text(self, groupby_field, value):
-        try:
-            model_field = [mfield for mfield, field in self.model_fields if field == groupby_field][0]
-        except:
-            model_field = None
+        # try:
+        model_field = [mfield for mfield, field in self.model_fields if field == groupby_field][0]
+        # TODO: narrow
+        # except:
+        #     model_field = None
         value = self.get_grouper_text(value, groupby_field, model_field)
         if value is None or unicode(value) == u'None':
             if groupby_field is None or unicode(groupby_field) == u'None':
@@ -298,43 +351,46 @@ class ReportAdmin(object):
                 value = force_unicode(_('Nothing'))
         return value
 
-    def _get_value_text(self, index, value):
-        try:
-            model_field = self.model_fields[index][0]
-        except:
-            model_field = None
+    def _get_value_text(self, index, value, do_localize=True):
+        # try:
+        model_field = self.model_fields[index][0]
+        # TODO: narrow
+        # except:
+        #     model_field = None
 
-        value = self.get_value_text(value, index, model_field)
+        value = self.get_value_text(value, index, model_field, do_localize)
         if value is None or unicode(value) == u'None':
             value = ''
         return value
 
     def get_grouper_text(self, value, field, model_field):
-        try:
-            if not isinstance(model_field, (str, unicode)):
-                obj = model_field.model(**{field: value})
-                if hasattr(obj, 'get_%s_display' % field):
-                    value = getattr(obj, 'get_%s_display' % field)()
-        except:
-            pass
+        if not isinstance(model_field, (str, unicode)) and '__' not in field:
+            obj = model_field.model(**{field: value})
+            if hasattr(obj, 'get_%s_display' % field):
+                value = getattr(obj, 'get_%s_display' % field)()
         return value
 
     # @cache_return
     def get_m2m_field_names(self):
         return [field for ffield, field, index, mfield in self.model_m2m_fields]
 
-    def get_value_text(self, value, index, model_field):
-        try:
-            if not isinstance(model_field, (str, unicode)):
-                obj = model_field.model(**{model_field.name: value})
-                if hasattr(obj, 'get_%s_display' % model_field.name):
-                    return getattr(obj, 'get_%s_display' % model_field.name)()
-        except:
-            pass
-        return localize(value)
+    def get_value_text(self, value, index, model_field, do_localize=True):
+        # try:
+        if not isinstance(model_field, (str, unicode)):
+            obj = model_field.model(**{model_field.name: value})
+            if hasattr(obj, 'get_%s_display' % model_field.name):
+                return getattr(obj, 'get_%s_display' % model_field.name)()
+        # TODO: narrow or remove
+        # except:
+        #     pass
+        return localize(value) if do_localize else value
 
-    def get_empty_row_asdict(self, collection, default_value=[]):
+    def get_empty_row_asdict(self, collection, default_value=None):
         erow = {}
+
+        if default_value is None:
+            default_value = []
+
         for field in collection:
             erow[field] = copy.copy(default_value)
         return dict(copy.deepcopy(erow))
@@ -345,11 +401,13 @@ class ReportAdmin(object):
     def get_fields(self):
         return [x for x in self.fields if not x in self.related_fields]
 
-    def get_column_names(self, ignore_columns={}):
+    def get_column_names(self, ignore_columns=None):
         """
         Return the list of columns
         """
         values = []
+        if ignore_columns is None:
+            ignore_columns = {}
         for field, field_name in self.model_fields:
             if field_name in ignore_columns:
                 continue
@@ -395,9 +453,8 @@ class ReportAdmin(object):
                 title = force_unicode(self.model._meta.verbose_name_plural).lower().capitalize()
         return title
 
-    def get_render_context(self, request, extra_context={}, by_row=None):
+    def get_render_context(self, request, extra_context=None, by_row=None):
         context_request = request or self.request
-        related_fields = []
         filter_related_fields = {}
         if self.parent_report and by_row:
             for mfield, cfield, index in self.related_inline_filters:
@@ -410,30 +467,38 @@ class ReportAdmin(object):
 
             column_labels = self.get_column_names(filter_related_fields)
             report_rows = []
-            groupby_data = None
-            filter_kwargs = None
             report_anchors = []
             chart = None
 
-            context = {
-                'report': self,
-                'form_groupby': form_groupby,
-                'form_filter': form_filter,
-                'form_config': form_config if self.type == 'chart' else None,
-                'chart': chart,
-                'report_anchors': report_anchors,
-                'column_labels': column_labels,
-                'report_rows': report_rows,
-            }
+            # context = {
+            #     'report': self,
+            #     'form_groupby': form_groupby,
+            #     'form_filter': form_filter,
+            #     'form_config': form_config if self.type == 'chart' else None,
+            #     'chart': chart,
+            #     'report_anchors': report_anchors,
+            #     'column_labels': column_labels,
+            #     'report_rows': report_rows,
+            # }
 
             if context_request.GET:
-                groupby_data = form_groupby.get_cleaned_data() if form_groupby else None
+                groupby_data = form_groupby.get_cleaned_data() if form_groupby else {}
                 filter_kwargs = filter_related_fields or form_filter.get_filter_kwargs()
+                do_export = None
+                do_localize = True
+
+                if not context_request.GET.get('export', None) is None and not self.parent_report:
+                    if context_request.GET.get('export') == 'excel':
+                        do_export = 'excel'
+                        do_localize = False
+                    elif context_request.GET.get('export') == 'pdf':
+                        do_export = 'pdf'
+
                 if groupby_data:
+                    # sets self.groupby and self.onlytotal variables
                     self.__dict__.update(groupby_data)
-                else:
-                    self.__dict__['onlytotals'] = False
-                report_rows = self.get_rows(context_request, groupby_data, filter_kwargs, filter_related_fields)
+
+                report_rows = self.get_rows(groupby_data, filter_kwargs, filter_related_fields, do_localize=do_localize)
 
                 for g, r in report_rows:
                     report_anchors.append(g)
@@ -441,7 +506,7 @@ class ReportAdmin(object):
                 if len(report_anchors) <= 1:
                     report_anchors = []
 
-                if self.type == 'chart' and groupby_data and groupby_data['groupby']:
+                if self.type == 'chart' and groupby_data and 'groupby' in groupby_data:
                     config = form_config.get_config_data()
                     if config:
                         chart = self.get_chart(config, report_rows)
@@ -452,55 +517,65 @@ class ReportAdmin(object):
                             if r.is_value():
                                 rows.remove(r)
 
-                if not context_request.GET.get('export', None) is None and not self.parent_report:
-                    if context_request.GET.get('export') == 'excel':
-                        book = Workbook(encoding='utf-8')
-                        sheet1 = FitSheetWrapper(book.add_sheet(self.get_title()[:20]))
-                        stylebold = easyxf('font: bold true; alignment:')
-                        stylevalue = easyxf('alignment: horizontal left, vertical top;')
-                        row_index = 0
-                        for index, x in enumerate(column_labels):
-                            sheet1.write(row_index, index, u'%s' % x, stylebold)
-                        row_index += 1
+                if do_export == 'excel':
+                    book = Workbook(encoding='utf-8')
+                    sheet1 = FitSheetWrapper(book.add_sheet(self.get_title()[:20]))
+                    stylebold = easyxf('font: bold true; alignment:')
+                    stylevalue = easyxf('alignment: horizontal left, vertical top;')
+                    row_index = 0
+                    for index, x in enumerate(column_labels):
+                        sheet1.write(row_index, index, u'%s' % x, stylebold)
+                    row_index += 1
 
-                        for g, rows in report_rows:
-                            if g:
-                                sheet1.write(row_index, 0, u'%s' % g, stylebold)
-                                row_index += 1
-                            for row in list(rows):
-                                if row.is_value():
-                                    for index, x in enumerate(row):
-                                        sheet1.write(row_index, index, unicode(x), stylevalue)
-                                    row_index += 1
-                                elif row.is_caption:
-                                    for index, x in enumerate(row):
-                                        if not isinstance(x, (unicode, str)):
-                                            sheet1.write(row_index, index, x.text(), stylebold)
+                    for g, rows in report_rows:
+                        if g:
+                            sheet1.write(row_index, 0, unicode(g), stylebold)
+                            row_index += 1
+                        for row in list(rows):
+                            if row.is_value():
+                                for index, x in enumerate(row):
+                                    if isinstance(x.value, (list, tuple)):
+                                        if len(x.value) < 1:
+                                            xvalue = u''
+                                        elif len(x.value) == 1:
+                                            xvalue = x.value[0]
                                         else:
-                                            sheet1.write(row_index, index, x, stylebold)
-                                    row_index += 1
-                                elif row.is_total:
-                                    for index, x in enumerate(row):
+                                            xvalue = u''.join([unicode(v) for v in x.value])
+                                    else:
+                                        xvalue = x.text()
+                                        # xvalue = x.value
+                                    sheet1.write(row_index, index, xvalue, stylevalue)
+                                    # sheet1.write(row_index, index, x.value, stylevalue)
+                                row_index += 1
+                            elif row.is_caption:
+                                for index, x in enumerate(row):
+                                    if not isinstance(x, (unicode, str)):
                                         sheet1.write(row_index, index, x.text(), stylebold)
-                                        sheet1.write(row_index + 1, index, ' ')
-                                    row_index += 2
+                                    else:
+                                        sheet1.write(row_index, index, x, stylebold)
+                                row_index += 1
+                            elif row.is_total:
+                                for index, x in enumerate(row):
+                                    sheet1.write(row_index, index, x.text(), stylebold)
+                                    sheet1.write(row_index + 1, index, u' ')
+                                row_index += 2
 
-                        response = HttpResponse(mimetype="application/ms-excel")
-                        response['Content-Disposition'] = 'attachment; filename=%s.xls' % self.slug
-                        book.save(response)
-                        return response
-                    if context_request.GET.get('export') == 'pdf':
-                        inlines = [ir(self, context_request) for ir in self.inlines]
-                        report_anchors = None
-                        setattr(self, 'is_export', True)
-                        context = {
-                            'report': self,
-                            'column_labels': column_labels,
-                            'report_rows': report_rows,
-                            'report_inlines': inlines,
-                        }
-                        context.update({'pagesize': 'legal landscape'})
-                        return render_to_pdf(self, 'model_report/export_pdf.html', context)
+                    response = HttpResponse(mimetype="application/ms-excel")
+                    response['Content-Disposition'] = 'attachment; filename=%s.xls' % self.get_slug()
+                    book.save(response)
+                    return response
+
+                if do_export == 'pdf':
+                    inlines = [ir(self, context_request) for ir in self.inlines]
+                    setattr(self, 'is_export', True)
+                    context = {
+                        'report': self,
+                        'column_labels': column_labels,
+                        'report_rows': report_rows,
+                        'report_inlines': inlines,
+                    }
+                    context.update({'pagesize': 'legal landscape'})
+                    return render_to_pdf(self, 'model_report/export_pdf.html', context)
 
             inlines = [ir(self, context_request) for ir in self.inlines]
 
@@ -529,7 +604,7 @@ class ReportAdmin(object):
         finally:
             globals()['_cache_class'] = {}
 
-    def render(self, request, extra_context={}):
+    def render(self, request, extra_context=None):
         context_or_response = self.get_render_context(request, extra_context)
 
         if isinstance(context_or_response, HttpResponse):
@@ -550,21 +625,6 @@ class ReportAdmin(object):
 
     def get_form_config(self, request):
 
-        DEFAULT_CHART_TYPES = (
-            ('area', _('Area')),
-            ('line', _('Line')),
-            ('column', _('Columns')),
-            ('pie', _('Pie')),
-        )
-        CHART_SERIE_OPERATOR = (
-            ('', '---------'),
-            ('sum', _('Sum')),
-            ('len', _('Count')),
-            ('avg', _('Average')),
-            ('min', _('Min')),
-            ('max', _('Max')),
-        )
-
         class ConfigForm(forms.Form):
 
             chart_mode = forms.ChoiceField(label=_('Chart type'), choices=(), required=False)
@@ -576,7 +636,7 @@ class ReportAdmin(object):
                 choices = [('', '')]
                 for k, v in DEFAULT_CHART_TYPES:
                     if k in self.chart_types:
-                        choices.append([k, v])
+                        choices.append((k, v))
                 self.fields['chart_mode'].choices = list(choices)
                 choices = [('', '')]
                 for i, (index, mfield, field, caption) in enumerate(self.serie_fields):
@@ -596,7 +656,7 @@ class ReportAdmin(object):
 
         ConfigForm.serie_fields = self.get_serie_fields()
         ConfigForm.chart_types = self.chart_types
-        ConfigForm.serie_fields
+        # ConfigForm.serie_fields
         form = ConfigForm(data=request.GET or None)
         form.is_valid()
 
@@ -604,11 +664,13 @@ class ReportAdmin(object):
 
     # @cache_return
     def get_groupby_fields(self):
-        return [(mfield, field, caption) for (mfield, field), caption in zip(self.model_fields, self.get_column_names()) if field in self.list_group_by]
+        return [(mfield, field, caption) for (mfield, field), caption in zip(self.model_fields, self.get_column_names())
+                if field in self.list_group_by]
 
     # @cache_return
     def get_serie_fields(self):
-        return [(index, mfield, field, caption) for index, ((mfield, field), caption) in enumerate(zip(self.model_fields, self.get_column_names())) if field in self.list_serie_fields]
+        return [(index, mfield, field, caption) for index, ((mfield, field), caption) in
+                enumerate(zip(self.model_fields, self.get_column_names())) if field in self.list_serie_fields]
 
     # @cache_return
     def get_form_groupby(self, request):
@@ -681,13 +743,17 @@ class ReportAdmin(object):
                     else:
                         if not hasattr(model_field, 'formfield'):
                             field = forms.ModelChoiceField(queryset=model_field.model.objects.all())
-                            field.label = self.override_field_labels.get(k, base_label)(self, field) if k in self.override_field_labels else field_lookup
+                            if k in self.override_field_labels:
+                                field.label = self.override_field_labels.get(k, base_label)(self, field)
+                            # TODO find what is field lookup
+                            # field.label = self.override_field_labels.get(k, base_label)(self, field) \
+                            #     if k in self.override_field_labels else field_lookup
                         else:
                             field = model_field.formfield()
                         field.label = force_unicode(_(field.label))
 
                 else:
-                    if isinstance(v, (forms.BooleanField)):
+                    if isinstance(v, forms.BooleanField):
                         form_fields.pop(k)
                         field = forms.ChoiceField()
                         field.label = v.label
@@ -720,6 +786,7 @@ class ReportAdmin(object):
 
         form_class = type('FilterFormBase', (forms.BaseForm,), {'base_fields': form_fields})
 
+        # noinspection PyProtectedMember
         class FilterForm(form_class):
 
             def _post_clean(self):
@@ -728,26 +795,26 @@ class ReportAdmin(object):
             def get_filter_kwargs(self):
                 if not self.is_valid():
                     return {}
-                filter_kwargs = dict(self.cleaned_data)
-                for k, v in dict(filter_kwargs).items():
-                    if not v:
-                        filter_kwargs.pop(k)
+                filter_kwargs = self.cleaned_data
+                for key, value in filter_kwargs.items():
+                    if not value:
+                        filter_kwargs.pop(key)
                         continue
-                    if k == '__all__':
-                        filter_kwargs.pop(k)
+                    if key == '__all__':
+                        filter_kwargs.pop(key)
                         continue
-                    if isinstance(v, (list, tuple)):
-                        if isinstance(self.fields[k], (RangeField)):
-                            filter_kwargs.pop(k)
-                            start_range, end_range = v
+                    if isinstance(value, (list, tuple)):
+                        if isinstance(self.fields[key], RangeField):
+                            filter_kwargs.pop(key)
+                            start_range, end_range = value
                             if start_range:
-                                filter_kwargs['%s__gte' % k] = start_range
+                                filter_kwargs['%s__gte' % key] = start_range
                             if end_range:
-                                filter_kwargs['%s__lte' % k] = end_range
-                    elif hasattr(self.fields[k], 'as_boolean'):
-                        if v:
-                            filter_kwargs.pop(k)
-                            filter_kwargs[k] = (unicode(v) == u'True')
+                                filter_kwargs['%s__lte' % key] = end_range
+                    elif hasattr(self.fields[key], 'as_boolean'):
+                        if value:
+                            filter_kwargs.pop(key)
+                            filter_kwargs[key] = (unicode(value) == u'True')
                 return filter_kwargs
 
             def get_cleaned_data(self):
@@ -756,26 +823,27 @@ class ReportAdmin(object):
             def __init__(self, *args, **kwargs):
                 super(FilterForm, self).__init__(*args, **kwargs)
                 self.filter_report_is_all = '__all__' in self.fields and len(self.fields) == 1
-                try:
-                    data_filters = {}
-                    vals = args[0]
-                    for k in vals.keys():
-                        if k in self.fields:
-                            data_filters[k] = vals[k]
-                    for name in self.fields:
-                        for k, v in data_filters.items():
-                            if k == name:
-                                continue
-                            field = self.fields[name]
-                            if hasattr(field, 'queryset'):
-                                qs = field.queryset
-                                if k in qs.model._meta.get_all_field_names():
-                                    field.queryset = qs.filter(Q(**{k: v}))
-                except:
-                    pass
+                # try:
+                data_filters = {}
+                vals = args[0]
+                for key in vals.keys():
+                    if key in self.fields:
+                        data_filters[key] = vals[key]
+                for name in self.fields:
+                    for key, value in data_filters.items():
+                        if key == name:
+                            continue
+                        local_field = self.fields[name]
+                        if hasattr(local_field, 'queryset'):
+                            qs = local_field.queryset
+                            if key in qs.model._meta.get_all_field_names():
+                                local_field.queryset = qs.filter(Q(**{key: value}))
+                # TODO narrow or remove
+                # except:
+                #     pass
 
-                for field in self.fields:
-                    self.fields[field].required = False
+                for local_field in self.fields:
+                    self.fields[local_field].required = False
 
         form = FilterForm(data=request.GET or None)
         form.is_valid()
@@ -785,33 +853,40 @@ class ReportAdmin(object):
     def filter_query(self, qs):
         return qs
 
-    def get_rows(self, request, groupby_data=None, filter_kwargs={}, filter_related_fields={}):
+    def get_rows(self, groupby_data=None, filter_kwargs=None, filter_related_fields=None, do_localize=True):
         report_rows = []
 
-        def get_field_value(obj, field):
-            if isinstance(obj, (dict)):
-                return obj[field]
-            left_field = field.split("__")[0]
-            try:
-                right_field = "__".join(field.split("__")[1:])
-            except:
-                right_field = ''
+        def get_field_value(obj, pfield):
+            if isinstance(obj, dict):
+                return obj[pfield]
+            left_field = pfield.split("__")[0]
+            # try:
+            right_field = "__".join(pfield.split("__")[1:])
+            # except:
+            #     right_field = ''
             if right_field:
                 return get_field_value(getattr(obj, left_field), right_field)
             if hasattr(obj, 'get_%s_display' % left_field):
-                attr = getattr(obj, 'get_%s_display' % field)
+                attr = getattr(obj, 'get_%s_display' % pfield)
             else:
-                attr = getattr(obj, field)
+                attr = getattr(obj, pfield)
             if callable(attr):
                 attr = attr()
             return attr
+
+        if filter_related_fields is None:
+            filter_related_fields = {}
+
+        if filter_kwargs is None:
+            filter_kwargs = {}
 
         for kwarg, value in filter_kwargs.items():
             if kwarg in self.override_field_filter_values:
                 filter_kwargs[kwarg] = self.override_field_filter_values.get(kwarg)(self, value)
 
         qs = self.get_queryset(filter_kwargs)
-        ffields = [f if 'self.' not in f else 'pk' for f in self.get_query_field_names() if f not in filter_related_fields]
+        ffields = ['pk' if f.startswith('self.') else f for f in self.get_query_field_names()
+                   if f not in filter_related_fields]
         extra_ffield = []
         backend = settings.DATABASES['default']['ENGINE'].split('.')[-1]
         for f in list(ffields):
@@ -865,34 +940,36 @@ class ReportAdmin(object):
 
         def get_with_dotvalues(resources):
             # {1: 'field.method'}
-            dot_indexes = dict([(index, dot_field) for index, dot_field in enumerate(self.get_fields()) if '.' in dot_field])
+            dot_indexes = dict([(pos, dot_field) for pos, dot_field in enumerate(self.get_fields())
+                                if '.' in dot_field])
             dot_indexes_values = {}
 
-            dot_model_fields = [(index, model_field[0]) for index, model_field in enumerate(self.model_fields) if index in dot_indexes]
+            dot_model_fields = [(pos, model_field[0]) for pos, model_field in enumerate(self.model_fields)
+                                if pos in dot_indexes]
             # [ 1, model_field] ]
-            for index, model_field in dot_model_fields:
-                model_ids = set([row[index] for row in resources])
-                if isinstance(model_field, (unicode, str)) and 'self.' in model_field:
+            for pos, model_field in dot_model_fields:
+                model_ids = set([res[pos] for res in resources])
+                if isinstance(model_field, (unicode, str)) and model_field.startswith('self.'):
                     model_qs = self.model.objects.filter(pk__in=model_ids)
                 else:
                     model_qs = model_field.rel.to.objects.filter(pk__in=model_ids)
                 div = {}
-                method_name = dot_indexes[index].split('.')[1]
+                method_name = dot_indexes[pos].split('.')[1]
                 for obj in model_qs:
                     method_value = getattr(obj, method_name)
                     if callable(method_value):
                         method_value = method_value()
                     div[obj.pk] = method_value
-                dot_indexes_values[index] = div
+                dot_indexes_values[pos] = div
                 del model_qs
 
             if dot_indexes_values:
                 new_resources = []
                 for index_row, old_row in enumerate(resources):
                     new_row = []
-                    for index, actual_value in enumerate(old_row):
-                        if index in dot_indexes_values:
-                            new_value = dot_indexes_values[index][actual_value]
+                    for pos, actual_value in enumerate(old_row):
+                        if pos in dot_indexes_values:
+                            new_value = dot_indexes_values[pos][actual_value]
                         else:
                             new_value = actual_value
                         new_row.append(new_value)
@@ -902,60 +979,60 @@ class ReportAdmin(object):
 
         def compute_row_totals(row_config, row_values, is_group_total=False, is_report_total=False):
             total_row = self.get_empty_row_asdict(self.get_fields(), ReportValue(' '))
-            for k, v in total_row.items():
-                if k in row_config:
-                    fun = row_config[k]
-                    value = fun(row_values[k])
-                    if k in self.get_m2m_field_names():
-                        value = ReportValue([value, ])
-                    value = ReportValue(value)
-                    value.is_value = False
-                    value.is_group_total = is_group_total
-                    value.is_report_total = is_report_total
-                    if k in self.override_field_values:
-                        value.to_value = self.override_field_values[k]
-                    if k in self.override_field_formats:
-                        value.format = self.override_field_formats[k]
-                    value.is_m2m_value = (k in self.get_m2m_field_names())
-                    total_row[k] = value
-            row = self.reorder_dictrow(total_row)
-            row = ReportRow(row)
-            row.is_total = True
-            return row
+            for field_name in total_row.keys():
+                if field_name in row_config:
+                    fun = row_config[field_name]
+                    cell_value = fun(row_values[field_name])
+                    if field_name in self.get_m2m_field_names():
+                        # cell_value = ReportValue([cell_value])
+                        cell_value = [cell_value]
+                    cell_value = ReportValue(cell_value)
+                    cell_value.is_value = False
+                    cell_value.is_group_total = is_group_total
+                    cell_value.is_report_total = is_report_total
+                    if field_name in self.override_field_values:
+                        cell_value.to_value = self.override_field_values[field_name]
+                    if field_name in self.override_field_formats:
+                        cell_value.format = self.override_field_formats[field_name]
+                    cell_value.is_m2m_value = field_name in self.get_m2m_field_names()
+                    total_row[field_name] = cell_value
+            totals_row = ReportRow(self.reorder_dictrow(total_row))
+            totals_row.is_total = True
+            return totals_row
 
         def compute_row_header(row_config):
             header_row = self.get_empty_row_asdict(self.get_fields(), ReportValue(''))
-            for k, fun in row_config.items():
+            for field_name, fun in row_config.items():
                 if hasattr(fun, 'caption'):
-                    value = force_unicode(fun.caption)
+                    field_value = force_unicode(fun.caption)
                 else:
-                    value = '&nbsp;'
-                header_row[k] = value
-            row = self.reorder_dictrow(header_row)
-            row = ReportRow(row)
-            row.is_caption = True
-            return row
+                    field_value = '&nbsp;'
+                header_row[field_name] = field_value
+            header_row = self.reorder_dictrow(header_row)
+            header_row = ReportRow(header_row)
+            header_row.is_caption = True
+            return header_row
 
         def group_m2m_field_values(gqs_values):
             values_results = []
-            m2m_indexes = [index for ffield, lkfield, index, field in self.model_m2m_fields]
+            m2m_indexes = [tpl[2] for tpl in self.model_m2m_fields]
 
             def get_key_values(gqs_vals):
-                return [v if index not in m2m_indexes else None for index, v in enumerate(gqs_vals)]
+                return [gv if field_idx not in m2m_indexes else None for field_idx, gv in enumerate(gqs_vals)]
 
             # gqs_values needs to already be sorted on the same key function
             # for groupby to work properly
             gqs_values.sort(key=get_key_values)
             res = groupby(gqs_values, key=get_key_values)
-            row_values = {}
+
             for key, values in res:
-                row_values = dict([(index, []) for index in m2m_indexes])
-                for v in values:
-                    for index in m2m_indexes:
-                        if v[index] not in row_values[index]:
-                            row_values[index].append(v[index])
-                for index, vals in row_values.items():
-                    key[index] = vals
+                row_values = dict([(pos, []) for pos in m2m_indexes])
+                for subrow_value in values:
+                    for pos in m2m_indexes:
+                        if subrow_value[pos] not in row_values[pos]:
+                            row_values[pos].append(subrow_value[pos])
+                for pos, vals in row_values.items():
+                    key[pos] = vals
                 values_results.append(key)
             return values_results
 
@@ -963,7 +1040,6 @@ class ReportAdmin(object):
         if self.model_m2m_fields:
             qs_list = group_m2m_field_values(qs_list)
 
-        groupby_fn = None
         if groupby_data and groupby_data['groupby']:
             groupby_field = groupby_data['groupby']
             if groupby_field in self.override_group_value:
@@ -978,10 +1054,10 @@ class ReportAdmin(object):
         g = groupby(qs_list, key=groupby_fn)
 
         row_report_totals = self.get_empty_row_asdict(self.report_totals, [])
-        for grouper, resources in g:
+        for grouper, group_resources in g:
             rows = list()
             row_group_totals = self.get_empty_row_asdict(self.group_totals, [])
-            for resource in resources:
+            for resource in group_resources:
                 row = ReportRow()
                 if isinstance(resource, (tuple, list)):
                     for index, value in enumerate(resource):
@@ -989,7 +1065,7 @@ class ReportAdmin(object):
                             row_group_totals[ffields[index]].append(value)
                         elif ffields[index] in self.report_totals:
                             row_report_totals[ffields[index]].append(value)
-                        value = self._get_value_text(index, value)
+                        value = self._get_value_text(index, value, do_localize=do_localize)
                         value = ReportValue(value)
                         if ffields[index] in self.override_field_values:
                             value.to_value = self.override_field_values[ffields[index]]
@@ -1003,7 +1079,7 @@ class ReportAdmin(object):
                             row_group_totals[ffields[index]].append(value)
                         elif ffields[index] in self.report_totals:
                             row_report_totals[ffields[index]].append(value)
-                        value = self._get_value_text(index, value)
+                        value = self._get_value_text(index, value, do_localize=do_localize)
                         value = ReportValue(value)
                         if column in self.override_field_values:
                             value.to_value = self.override_field_values[column]
