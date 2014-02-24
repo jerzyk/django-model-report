@@ -375,14 +375,13 @@ class ReportAdmin(object):
         return [field for ffield, field, index, mfield in self.model_m2m_fields]
 
     def get_value_text(self, value, index, model_field, do_localize=True):
-        # try:
-        if not isinstance(model_field, (str, unicode)):
-            obj = model_field.model(**{model_field.name: value})
-            if hasattr(obj, 'get_%s_display' % model_field.name):
-                return getattr(obj, 'get_%s_display' % model_field.name)()
-        # TODO: narrow or remove
-        # except:
-        #     pass
+        try:
+            if not isinstance(model_field, (str, unicode)):
+                obj = model_field.model(**{model_field.name: value})
+                if hasattr(obj, 'get_%s_display' % model_field.name):
+                    return getattr(obj, 'get_%s_display' % model_field.name)()
+        except (TypeError, ValueError):
+            pass
         return localize(value) if do_localize else value
 
     def get_empty_row_asdict(self, collection, default_value=None):
