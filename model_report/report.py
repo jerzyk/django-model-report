@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import copy
 import datetime
+from decimal import Decimal
 import re
 from django.contrib.contenttypes import generic
 from django.utils.formats import localize
@@ -73,6 +74,11 @@ class FitSheetWrapper(object):
         elif isinstance(label, datetime.date):
             _saved_format = style.num_format_str
             style.num_format_str = 'dd/mm/yyyy'
+            self.sheet.write(r, c, label, style)
+            style.num_format_str = _saved_format
+        elif isinstance(label, (float, Decimal)):
+            _saved_format = style.num_format_str
+            style.num_format_str = '#,##0.00'
             self.sheet.write(r, c, label, style)
             style.num_format_str = _saved_format
         else:
@@ -541,8 +547,8 @@ class ReportAdmin(object):
                                         else:
                                             xvalue = u''.join([unicode(v) for v in x.value])
                                     else:
-                                        xvalue = x.text()
-                                        # xvalue = x.value
+                                        # xvalue = x.text()
+                                        xvalue = x.value
                                     sheet1.write(row_index, index, xvalue, stylevalue)
                                     # sheet1.write(row_index, index, x.value, stylevalue)
                                 row_index += 1
