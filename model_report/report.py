@@ -30,6 +30,8 @@ from model_report.export_pdf import render_to_pdf
 import arial10
 
 
+MAX_COLUMN_WIDTH = 2**16 - 1  # 65535
+
 DEFAULT_CHART_TYPES = (
     ('area', _('Area')),
     ('line', _('Line')),
@@ -90,7 +92,7 @@ class FitSheetWrapper(object):
 
         bold = str(style.font.bold) in ('1', 'true', 'True')
 
-        width = int(arial10.fitwidth(unicode_label, bold))
+        width = min(int(arial10.fitwidth(unicode_label, bold)), MAX_COLUMN_WIDTH)
         if width > self.widths.get(c, 0):
             self.widths[c] = width
             self.sheet.col(c).width = width
